@@ -1,0 +1,41 @@
+# Built-in Android / Gradle ignores
+.gradle/
+build/
+**/build/
+*/*/build/
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.shelf/
+
+# Android specific
+local.properties
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+output.json
+
+# Java / Spring Boot
+target/
+*.class
+*.jar
+*.war
+
+# Log files
+*.log
+
+# OS generated
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+
+# Nested redundant duplicate folder
+demo/MybussinessApp/

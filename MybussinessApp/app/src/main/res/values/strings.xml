@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Kore Business</string>
+    <string name="mybusiness">Kore</string>
+
+    <string name="widget_description">Quick access to your Kore business stats.</string>
+    <string name="widget_label_profit">Profit</string>
+    <string name="widget_label_growth">Growth</string>
+    <string name="widget_label_orders">Orders</string>
+    <string name="widget_btn_dashboard">Dashboard</string>
+    <string name="widget_btn_products">Products</string>
+    <string name="widget_btn_open">Open App</string>
+</resources>

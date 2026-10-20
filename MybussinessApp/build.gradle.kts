@@ -1,0 +1,15 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+plugins {
+    id("com.android.application") version "8.13.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.24" apply false
+}
+
+// Define versions for consistent dependency management
+buildscript {
+    extra.apply {
+        set("compose_compiler_version", "1.5.14")
+        set("compose_bom_version", "2024.06.00")
+        set("kotlin_version", "1.9.24")
+    }
+}
