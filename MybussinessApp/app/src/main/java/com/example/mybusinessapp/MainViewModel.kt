@@ -74,6 +74,18 @@ class MainViewModel(
     private val _serverBaseUrl = MutableStateFlow(com.example.mybusinessapp.auth.AuthApiService.BASE_URL)
     val serverBaseUrl = _serverBaseUrl.asStateFlow()
 
+    private var themeManager: com.example.mybusinessapp.ui.theme.ThemePreferencesManager? = null
+    private var secureStorage: com.example.mybusinessapp.security.SecureKeyStoreManager? = null
+
+    private val _themeAccent = MutableStateFlow(com.example.mybusinessapp.ui.theme.ThemeAccent.SUNBURST_AMBER)
+    val themeAccent = _themeAccent.asStateFlow()
+
+    private val _darkMode = MutableStateFlow(true)
+    val darkMode = _darkMode.asStateFlow()
+
+    private val _isBiometricProtected = MutableStateFlow(true)
+    val isBiometricProtected = _isBiometricProtected.asStateFlow()
+
     init {
         loadDashboardData()
         loadStories()
@@ -134,10 +146,45 @@ class MainViewModel(
             }
         }
 
+        themeManager = com.example.mybusinessapp.ui.theme.ThemePreferencesManager.getInstance(context)
+        secureStorage = com.example.mybusinessapp.security.SecureKeyStoreManager.getInstance(context)
+        _isBiometricProtected.value = secureStorage?.isBiometricLockEnabled() ?: true
+
+        // 3. Dynamic Theme Accent & Dark Mode observation from DataStore
+        viewModelScope.launch {
+            themeManager?.themeAccentFlow?.collect { accent ->
+                _themeAccent.value = accent
+            }
+        }
+        viewModelScope.launch {
+            themeManager?.darkModeFlow?.collect { isDark ->
+                _darkMode.value = isDark
+            }
+        }
+
         if (manager.isLoggedIn()) {
             _currentUser.value = manager.getUser()
         }
         pingServer()
+    }
+
+    fun setThemeAccent(accent: com.example.mybusinessapp.ui.theme.ThemeAccent) {
+        _themeAccent.value = accent
+        viewModelScope.launch {
+            themeManager?.setThemeAccent(accent)
+        }
+    }
+
+    fun setDarkMode(enabled: Boolean) {
+        _darkMode.value = enabled
+        viewModelScope.launch {
+            themeManager?.setDarkMode(enabled)
+        }
+    }
+
+    fun setBiometricProtected(enabled: Boolean) {
+        _isBiometricProtected.value = enabled
+        secureStorage?.setBiometricLockEnabled(enabled)
     }
 
     fun initSession(manager: com.example.mybusinessapp.auth.UserSessionManager) {

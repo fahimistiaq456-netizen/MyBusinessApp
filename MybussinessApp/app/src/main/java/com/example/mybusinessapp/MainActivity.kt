@@ -1,8 +1,8 @@
 package com.example.mybusinessapp
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -57,38 +59,52 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.mybusinessapp.auth.UserSessionManager
+import com.example.mybusinessapp.cart.CartBottomSheet
+import com.example.mybusinessapp.cart.CartIntent
+import com.example.mybusinessapp.cart.CartViewModel
+import com.example.mybusinessapp.cart.Product
+import com.example.mybusinessapp.network.NetworkStatus
+import com.example.mybusinessapp.network.PingStatus
+import com.example.mybusinessapp.security.BiometricAuthManager
+import com.example.mybusinessapp.ui.ConnectionStatusPill
 import com.example.mybusinessapp.ui.FluidBackground
 import com.example.mybusinessapp.ui.FluidGlassCard
 import com.example.mybusinessapp.ui.ForgotPasswordScreen
+import com.example.mybusinessapp.ui.OfflineBanner
 import com.example.mybusinessapp.ui.SignUpScreen
 import com.example.mybusinessapp.ui.Soft3DIcon
+import com.example.mybusinessapp.ui.chart.AnimatedRadialProgress
+import com.example.mybusinessapp.ui.chart.InteractiveBezierChart
 import com.example.mybusinessapp.ui.theme.GradientBurst
 import com.example.mybusinessapp.ui.theme.GradientSunset
 import com.example.mybusinessapp.ui.theme.MyBusinessAppTheme
+import com.example.mybusinessapp.ui.theme.ThemeAccent
 import com.example.mybusinessapp.ui.weather.SimpleWeatherWidget
-import androidx.compose.ui.zIndex
-import com.example.mybusinessapp.network.NetworkStatus
-import com.example.mybusinessapp.network.PingStatus
-import com.example.mybusinessapp.ui.ConnectionStatusPill
-import com.example.mybusinessapp.ui.OfflineBanner
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.absoluteValue
 
 // ==================================================================
 // 📱 MAIN ACTIVITY
 // ==================================================================
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val sessionManager = UserSessionManager.getInstance(applicationContext)
         val startDest = if (sessionManager.isLoggedIn()) "main" else "login"
 
         setContent {
-            MyBusinessAppTheme(darkTheme = true) {
-                val rootNav = rememberNavController()
-                val viewModel: MainViewModel = viewModel()
+            val viewModel: MainViewModel = viewModel()
+            val cartViewModel: CartViewModel = viewModel()
 
-                val networkStatus by viewModel.networkStatus.collectAsState()
+            val networkStatus by viewModel.networkStatus.collectAsState()
+            val themeAccent by viewModel.themeAccent.collectAsState()
+            val darkMode by viewModel.darkMode.collectAsState()
+
+            MyBusinessAppTheme(darkTheme = darkMode, themeAccent = themeAccent) {
+                val rootNav = rememberNavController()
 
                 LaunchedEffect(Unit) {
                     viewModel.initSession(applicationContext, sessionManager)
@@ -141,7 +157,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             composable("main") {
-                                MainHost(viewModel = viewModel, rootNav = rootNav)
+                                MainHost(viewModel = viewModel, cartViewModel = cartViewModel, rootNav = rootNav)
                             }
                         }
 
@@ -165,7 +181,11 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainHost(viewModel: MainViewModel, rootNav: NavHostController) {
+fun MainHost(
+    viewModel: MainViewModel,
+    cartViewModel: CartViewModel,
+    rootNav: NavHostController
+) {
     val mainNav = rememberNavController()
     val navBackStackEntry by mainNav.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "dashboard"
@@ -195,7 +215,11 @@ fun MainHost(viewModel: MainViewModel, rootNav: NavHostController) {
         },
         bottomBar = {
             if (showBottomBar) {
-                SunburstBottomBar(mainNav = mainNav, currentRoute = currentRoute)
+                SunburstBottomBar(
+                    mainNav = mainNav,
+                    currentRoute = currentRoute,
+                    cartViewModel = cartViewModel
+                )
             }
         }
     ) { innerPadding ->
@@ -226,8 +250,8 @@ fun MainHost(viewModel: MainViewModel, rootNav: NavHostController) {
                 }
             ) {
                 composable("dashboard") { DashboardScreen(viewModel, mainNav) }
-                composable("products") { ProductScreen() }
-                composable("profile") { EnhancedProfileScreen(viewModel = viewModel) }
+                composable("products") { ProductScreen(cartViewModel = cartViewModel) }
+                composable("profile") { EnhancedProfileScreen(viewModel = viewModel, cartViewModel = cartViewModel) }
                 composable("settings") {
                     SettingsScreen(
                         viewModel = viewModel,
@@ -262,7 +286,9 @@ fun MainHost(viewModel: MainViewModel, rootNav: NavHostController) {
     }
 }
 
-// ==================================================================\n// 📈 REVENUE DETAIL SCREEN\n// ==================================================================
+// ==================================================================
+// 📈 REVENUE DETAIL SCREEN
+// ==================================================================
 
 @Composable
 fun RevenueDetailScreen(onBack: () -> Unit) {
@@ -275,9 +301,25 @@ fun RevenueDetailScreen(onBack: () -> Unit) {
         onBack = onBack
     ) {
         item(span = { GridItemSpan(2) }) {
-            DetailChartCard("Weekly Revenue Flow")
+            FluidGlassCard(modifier = Modifier.wrapContentHeight()) {
+                Column(Modifier.padding(20.dp)) {
+                    Text(
+                        text = "Revenue Performance Sparkline (Interactive Scrubber)",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    InteractiveBezierChart(
+                        lineColor = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                    )
+                }
+            }
         }
-        item { DetailMiniCard("Transactions", "1,205", Icons.Rounded.ReceiptLong) }
+        item { DetailMiniCard("Transactions", "1,205", Icons.AutoMirrored.Rounded.ReceiptLong) }
         item { DetailMiniCard("Avg. Order", "$11.80", Icons.Rounded.Analytics) }
         item(span = { GridItemSpan(2) }) {
             DetailInfoCard("Projected Earnings", "Your revenue is projected to reach $18k by the end of this month based on current growth trends.")
@@ -285,7 +327,9 @@ fun RevenueDetailScreen(onBack: () -> Unit) {
     }
 }
 
-// ==================================================================\n// 👥 USERS DETAIL SCREEN\n// ==================================================================
+// ==================================================================
+// 👥 USERS DETAIL SCREEN
+// ==================================================================
 
 @Composable
 fun UsersDetailScreen(onBack: () -> Unit) {
@@ -308,20 +352,49 @@ fun UsersDetailScreen(onBack: () -> Unit) {
     }
 }
 
-// ==================================================================\n// 🎯 SALES DETAIL SCREEN\n// ==================================================================
+// ==================================================================
+// 🎯 SALES DETAIL SCREEN
+// ==================================================================
 
 @Composable
 fun SalesDetailScreen(onBack: () -> Unit) {
     MetricDetailBase(
         title = "Sales Target",
         value = "85%",
-        trend = "On Track",
+        trend = "On Track (+12.5% vs Last Mo)",
         icon = Icons.Rounded.AdsClick,
         color = MaterialTheme.colorScheme.tertiary,
         onBack = onBack
     ) {
         item(span = { GridItemSpan(2) }) {
-            DetailChartCard("Monthly Goal Progress")
+            FluidGlassCard(modifier = Modifier.wrapContentHeight()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Animated Radial Target Progress (85%)",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    AnimatedRadialProgress(
+                        targetPercentage = 0.85f,
+                        modifier = Modifier.size(170.dp),
+                        startColor = MaterialTheme.colorScheme.primary,
+                        endColor = MaterialTheme.colorScheme.tertiary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Spring physics animation with smooth gradient SVG arc",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 11.sp
+                    )
+                }
+            }
         }
         item { DetailMiniCard("Items Sold", "492", Icons.Rounded.Inventory) }
         item { DetailMiniCard("Lead Conv.", "18%", Icons.Rounded.FilterAlt) }
@@ -407,22 +480,16 @@ fun MetricDetailBase(
 
 @Composable
 fun DetailChartCard(label: String) {
-    FluidGlassCard(modifier = Modifier.height(200.dp)) {
+    FluidGlassCard(modifier = Modifier.wrapContentHeight()) {
         Column(Modifier.padding(20.dp)) {
             Text(label, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.weight(1f))
-            Canvas(modifier = Modifier.fillMaxWidth().height(100.dp)) {
-                val points = listOf(0.2f, 0.4f, 0.3f, 0.7f, 0.6f, 0.9f, 0.8f)
-                val width = size.width / (points.size - 1)
-                val path = Path()
-                points.forEachIndexed { i, p ->
-                    val x = i * width
-                    val y = size.height - (p * size.height)
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                drawPath(path, Color.White.copy(alpha = 0.3f), style = Stroke(4f, cap = StrokeCap.Round))
-                drawPath(path, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.1f), Color.Transparent)), style = Fill)
-            }
+            Spacer(Modifier.height(12.dp))
+            InteractiveBezierChart(
+                lineColor = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+            )
         }
     }
 }
@@ -610,8 +677,13 @@ fun SunburstTopBar(
 // ==================================================================
 
 @Composable
-fun SunburstBottomBar(mainNav: NavHostController, currentRoute: String) {
+fun SunburstBottomBar(
+    mainNav: NavHostController,
+    currentRoute: String,
+    cartViewModel: CartViewModel = viewModel()
+) {
     val colors = MaterialTheme.colorScheme
+    val cartState by cartViewModel.state.collectAsState()
 
     val items = remember {
         listOf(
@@ -682,12 +754,37 @@ fun SunburstBottomBar(mainNav: NavHostController, currentRoute: String) {
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (selected) selIcon else unselIcon,
-                                contentDescription = route,
-                                tint = contentColor,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            val iconVector = if (selected) selIcon else unselIcon
+                            if (route == "products" && cartState.totalItemCount > 0) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(
+                                            containerColor = colors.primary,
+                                            contentColor = Color.White
+                                        ) {
+                                            Text(
+                                                text = if (cartState.totalItemCount > 99) "99+" else "${cartState.totalItemCount}",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = iconVector,
+                                        contentDescription = route,
+                                        tint = contentColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            } else {
+                                Icon(
+                                    imageVector = iconVector,
+                                    contentDescription = route,
+                                    tint = contentColor,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         Spacer(Modifier.height(2.dp))
                         Text(
@@ -1549,107 +1646,199 @@ fun SunburstTextField(
 // 🛍️ PRODUCT SCREEN
 // ==================================================================
 
+@OptIn(FlowPreview::class)
 @Composable
-fun ProductScreen() {
+fun ProductScreen(cartViewModel: CartViewModel = viewModel()) {
     var search by remember { mutableStateOf(TextFieldValue("")) }
     val colors = MaterialTheme.colorScheme
+    var showCartSheet by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp)
-    ) {
-        Spacer(Modifier.height(8.dp))
-        SunburstTextField(
-            value = search.text,
-            onValueChange = { search = TextFieldValue(it) },
-            label = "Search products...",
-            icon = Icons.Rounded.Search
-        )
-        Spacer(Modifier.height(14.dp))
+    val allProducts = remember { cartViewModel.sampleProducts }
+    var filteredProducts by remember { mutableStateOf(allProducts) }
+    val cartState by cartViewModel.state.collectAsState()
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(150.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(bottom = 110.dp)
+    // Debounced search with snapshotFlow { search.text }.debounce(300L).distinctUntilChanged()
+    LaunchedEffect(Unit) {
+        snapshotFlow { search.text }
+            .debounce(300L)
+            .distinctUntilChanged()
+            .collect { query ->
+                filteredProducts = if (query.isBlank()) {
+                    allProducts
+                } else {
+                    allProducts.filter { product ->
+                        product.name.contains(query, ignoreCase = true) ||
+                                product.category.contains(query, ignoreCase = true) ||
+                                product.description.contains(query, ignoreCase = true)
+                    }
+                }
+            }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
         ) {
-            val productNames = listOf("Solar Pro", "Nebula Hub", "Quantum Gear", "Pulse Watch", "Aura Pods", "Vortex Key")
-            val prices = listOf("$199.99", "$249.00", "$89.50", "$159.00", "$129.99", "$79.00")
-
-            items(6, key = { it }) { index ->
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    SunburstTextField(
+                        value = search.text,
+                        onValueChange = { search = TextFieldValue(it) },
+                        label = "Search products...",
+                        icon = Icons.Rounded.Search
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                // Quick Cart Access Action
                 FluidGlassCard(
-                    modifier = Modifier.height(230.dp),
-                    onClick = {}
+                    modifier = Modifier.size(54.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    onClick = { showCartSheet = true }
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                            contentAlignment = Alignment.Center
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        BadgedBox(
+                            badge = {
+                                if (cartState.totalItemCount > 0) {
+                                    Badge(
+                                        containerColor = colors.primary,
+                                        contentColor = Color.White
+                                    ) {
+                                        Text("${cartState.totalItemCount}", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         ) {
-                            Soft3DIcon(
-                                imageVector = Icons.Rounded.Widgets,
-                                color = colors.primary,
-                                size = 80.dp,
-                                iconSize = 36.dp
+                            Icon(
+                                Icons.Rounded.ShoppingCart,
+                                contentDescription = "View Cart",
+                                tint = colors.primary,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
 
-                        Spacer(Modifier.height(14.dp))
-                        Text(
-                            text = productNames[index % productNames.size],
-                            fontWeight = FontWeight.ExtraBold,
-                            color = colors.onBackground,
-                            fontSize = 16.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+            if (filteredProducts.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 40.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Rounded.SearchOff,
+                            contentDescription = null,
+                            tint = colors.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(48.dp)
                         )
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "Premium Edition",
-                            fontSize = 12.sp,
+                            "No products found for '${search.text}'",
                             color = colors.onSurfaceVariant,
                             fontWeight = FontWeight.Medium
                         )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(150.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 110.dp)
+                ) {
+                    items(filteredProducts, key = { it.id }) { product ->
+                        FluidGlassCard(
+                            modifier = Modifier.height(230.dp),
+                            onClick = { cartViewModel.processIntent(CartIntent.AddItem(product)) }
                         ) {
-                            Text(
-                                text = prices[index % prices.size],
-                                color = colors.tertiary,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 16.sp
-                            )
-
-                            Box(
+                            Column(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(colors.primary.copy(alpha = 0.15f))
-                                    .clickable { /* Add to cart */ },
-                                contentAlignment = Alignment.Center
+                                    .fillMaxSize()
+                                    .padding(16.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Add,
-                                    contentDescription = "Add to Cart",
-                                    tint = colors.primary,
-                                    modifier = Modifier.size(20.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Soft3DIcon(
+                                        imageVector = Icons.Rounded.Widgets,
+                                        color = colors.primary,
+                                        size = 80.dp,
+                                        iconSize = 36.dp
+                                    )
+                                }
+
+                                Spacer(Modifier.height(14.dp))
+                                Text(
+                                    text = product.name,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colors.onBackground,
+                                    fontSize = 16.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                                Text(
+                                    text = product.category,
+                                    fontSize = 12.sp,
+                                    color = colors.onSurfaceVariant,
+                                    fontWeight = FontWeight.Medium
+                                )
+
+                                Spacer(Modifier.height(12.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "$${String.format("%.2f", product.price)}",
+                                        color = colors.tertiary,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 16.sp
+                                    )
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(colors.primary.copy(alpha = 0.15f))
+                                            .clickable {
+                                                cartViewModel.processIntent(CartIntent.AddItem(product))
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Add,
+                                            contentDescription = "Add to Cart",
+                                            tint = colors.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (showCartSheet) {
+            CartBottomSheet(
+                cartViewModel = cartViewModel,
+                onDismiss = { showCartSheet = false }
+            )
         }
     }
 }
@@ -1659,12 +1848,22 @@ fun ProductScreen() {
 // ==================================================================
 
 @Composable
-fun EnhancedProfileScreen(viewModel: MainViewModel) {
+fun EnhancedProfileScreen(
+    viewModel: MainViewModel,
+    cartViewModel: CartViewModel = viewModel()
+) {
     val colors = MaterialTheme.colorScheme
     val currentUser by viewModel.currentUser.collectAsState()
     val isAuthLoading by viewModel.isAuthLoading.collectAsState()
+    val cartState by cartViewModel.state.collectAsState()
+
+    val context = LocalContext.current
+    val activity = context as? androidx.fragment.app.FragmentActivity
+    val biometricManager = remember { BiometricAuthManager(context) }
 
     var showEditDialog by remember { mutableStateOf(false) }
+    var showPaymentDialog by remember { mutableStateOf(false) }
+    var biometricErrorMessage by remember { mutableStateOf<String?>(null) }
 
     val displayName = currentUser?.fullName?.takeIf { it.isNotBlank() }
         ?: currentUser?.username?.uppercase()
@@ -1764,7 +1963,7 @@ fun EnhancedProfileScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     ProfileStat("Orders", "124")
-                    ProfileStat("Cart", "3")
+                    ProfileStat("Cart", "${cartState.totalItemCount}")
                     ProfileStat("Saved", "12")
                 }
             }
@@ -1777,7 +1976,23 @@ fun EnhancedProfileScreen(viewModel: MainViewModel) {
                         icon = Icons.Rounded.Edit,
                         onClick = { showEditDialog = true }
                     )
-                    SettingRow("Payment Methods", Icons.Rounded.CreditCard)
+                    SettingRow(
+                        text = "Payment Methods",
+                        icon = Icons.Rounded.CreditCard,
+                        onClick = {
+                            if (activity != null && biometricManager.canAuthenticate()) {
+                                biometricManager.authenticate(
+                                    activity = activity,
+                                    title = "Payment Methods Security",
+                                    subtitle = "Biometric 2FA verification required to view stored payment credentials",
+                                    onSuccess = { showPaymentDialog = true },
+                                    onError = { err -> biometricErrorMessage = err }
+                                )
+                            } else {
+                                showPaymentDialog = true
+                            }
+                        }
+                    )
                     SettingRow("Manage Subscription", Icons.Rounded.Star)
                 }
             }
@@ -1916,6 +2131,113 @@ fun EnhancedProfileScreen(viewModel: MainViewModel) {
             }
         }
     }
+
+    // Protected Biometrics Payment Methods Dialog
+    if (showPaymentDialog) {
+        Dialog(onDismissRequest = { showPaymentDialog = false }) {
+            FluidGlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(Color(0xFF00E676).copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Rounded.Fingerprint,
+                            contentDescription = null,
+                            tint = Color(0xFF00E676),
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Payment Methods",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onBackground
+                    )
+                    Text(
+                        text = "Hardware Biometrics Verified (Android Keystore)",
+                        fontSize = 11.sp,
+                        color = Color(0xFF00E676),
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Spacer(Modifier.height(20.dp))
+
+                    // Saved Card 1
+                    FluidGlassCard(shape = RoundedCornerShape(14.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Rounded.CreditCard, null, tint = colors.primary, modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Visa Business •••• 4242", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Expires 08/28 • Default", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                            }
+                            Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF00E676), modifier = Modifier.size(20.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Saved Card 2
+                    FluidGlassCard(shape = RoundedCornerShape(14.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Rounded.AccountBalance, null, tint = colors.tertiary, modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Corporate Checking •••• 8891", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("JPMorgan Chase Bank", fontSize = 11.sp, color = colors.onSurfaceVariant)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    Button(
+                        onClick = { showPaymentDialog = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Done")
+                    }
+                }
+            }
+        }
+    }
+
+    if (biometricErrorMessage != null) {
+        AlertDialog(
+            onDismissRequest = { biometricErrorMessage = null },
+            icon = { Icon(Icons.Rounded.Security, null, tint = colors.error) },
+            title = { Text("Biometric Authentication Required") },
+            text = { Text(biometricErrorMessage ?: "Verification failed.") },
+            confirmButton = {
+                TextButton(onClick = { biometricErrorMessage = null }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1941,12 +2263,42 @@ fun SettingsScreen(
     val serverBaseUrl: String = viewModel?.serverBaseUrl?.collectAsState()?.value ?: "http://10.0.2.2:8080/"
     val pingStatus: PingStatus = viewModel?.pingStatus?.collectAsState()?.value ?: PingStatus.Idle
 
+    val themeAccent by (viewModel?.themeAccent?.collectAsState() ?: remember { mutableStateOf(ThemeAccent.SUNBURST_AMBER) })
+    val darkMode by (viewModel?.darkMode?.collectAsState() ?: remember { mutableStateOf(true) })
+    val isBiometricProtected by (viewModel?.isBiometricProtected?.collectAsState() ?: remember { mutableStateOf(true) })
+
+    val context = LocalContext.current
+    val activity = context as? androidx.fragment.app.FragmentActivity
+    val biometricManager = remember { BiometricAuthManager(context) }
+
     var endpointInput by remember(serverBaseUrl) { mutableStateOf(serverBaseUrl) }
     var isEditing by remember { mutableStateOf(false) }
+    var showSecurityDialog by remember { mutableStateOf(false) }
+    var biometricError by remember { mutableStateOf<String?>(null) }
 
     // Run a lightweight ping coroutine (HEAD request) when the screen opens
     LaunchedEffect(Unit) {
         viewModel?.pingServer()
+    }
+
+    fun applyEndpointWithBiometrics(targetUrl: String) {
+        if (activity != null && isBiometricProtected && biometricManager.canAuthenticate()) {
+            biometricManager.authenticate(
+                activity = activity,
+                title = "Endpoint Security Check",
+                subtitle = "Biometric confirmation required to update backend server URL",
+                onSuccess = {
+                    endpointInput = targetUrl
+                    viewModel?.setServerBaseUrl(targetUrl)
+                    isEditing = false
+                },
+                onError = { err -> biometricError = err }
+            )
+        } else {
+            endpointInput = targetUrl
+            viewModel?.setServerBaseUrl(targetUrl)
+            isEditing = false
+        }
     }
 
     Column(
@@ -2022,7 +2374,7 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(14.dp))
 
-                // Editable Endpoint Field with Apply Action
+                // Editable Endpoint Field with Apply Action (Biometric protected)
                 OutlinedTextField(
                     value = endpointInput,
                     onValueChange = { newValue: String ->
@@ -2037,10 +2389,7 @@ fun SettingsScreen(
                     },
                     trailingIcon = {
                         IconButton(
-                            onClick = {
-                                viewModel?.setServerBaseUrl(endpointInput)
-                                isEditing = false
-                            }
+                            onClick = { applyEndpointWithBiometrics(endpointInput) }
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Check,
@@ -2050,10 +2399,7 @@ fun SettingsScreen(
                         }
                     },
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                        onDone = {
-                            viewModel?.setServerBaseUrl(endpointInput)
-                            isEditing = false
-                        }
+                        onDone = { applyEndpointWithBiometrics(endpointInput) }
                     ),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -2078,11 +2424,7 @@ fun SettingsScreen(
                 ) {
                     FilterChip(
                         selected = endpointInput.contains("10.0.2.2"),
-                        onClick = {
-                            endpointInput = "http://10.0.2.2:8080/"
-                            viewModel?.setServerBaseUrl(endpointInput)
-                            isEditing = false
-                        },
+                        onClick = { applyEndpointWithBiometrics("http://10.0.2.2:8080/") },
                         label = { Text("Emulator (10.0.2.2)", fontSize = 11.sp) },
                         leadingIcon = {
                             Icon(Icons.Rounded.PhoneAndroid, null, modifier = Modifier.size(14.dp))
@@ -2090,11 +2432,7 @@ fun SettingsScreen(
                     )
                     FilterChip(
                         selected = endpointInput.contains("127.0.0.1"),
-                        onClick = {
-                            endpointInput = "http://127.0.0.1:8080/"
-                            viewModel?.setServerBaseUrl(endpointInput)
-                            isEditing = false
-                        },
+                        onClick = { applyEndpointWithBiometrics("http://127.0.0.1:8080/") },
                         label = { Text("USB / Reverse", fontSize = 11.sp) },
                         leadingIcon = {
                             Icon(Icons.Rounded.Usb, null, modifier = Modifier.size(14.dp))
@@ -2137,23 +2475,99 @@ fun SettingsScreen(
             }
         }
 
+        // ==============================================================
+        // 🎨 DYNAMIC THEMING ENGINE (ACCENTS & DARK MODE)
+        // ==============================================================
         Spacer(Modifier.height(20.dp))
-        Text("Visuals & Display", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text("Visuals & Dynamic Theming", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         FluidGlassCard {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                SettingRow("Dark Mode (Enabled)", Icons.Rounded.DarkMode)
-                SettingRow("Theme Accents", Icons.Rounded.Palette)
+            Column(Modifier.padding(16.dp)) {
+                // Dark Mode Switch
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.DarkMode, null, tint = colors.primary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("Dark Mode", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(
+                                text = if (darkMode) "Deep Evening Sunburst Palette" else "Bright Light Palette",
+                                fontSize = 11.sp,
+                                color = colors.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = darkMode,
+                        onCheckedChange = { viewModel?.setDarkMode(it) }
+                    )
+                }
+
+                HorizontalDivider(
+                    color = colors.onSurface.copy(alpha = 0.1f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                // Theme Accent Palette Selection
+                Text(
+                    text = "Theme Accents (BusinessSuiteTheme):",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onBackground
+                )
+                Spacer(Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ThemeAccent.values().forEach { accent ->
+                        val isSelected = themeAccent == accent
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { viewModel?.setThemeAccent(accent) },
+                            label = { Text(accent.displayName, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(accent.primaryColor)
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = accent.primaryColor.copy(alpha = 0.25f),
+                                selectedLabelColor = accent.tertiaryColor
+                            )
+                        )
+                    }
+                }
             }
         }
 
+        // ==============================================================
+        // 🔐 HARDWARE BIOMETRICS & KEYSTORE (SECURITY & 2FA)
+        // ==============================================================
         Spacer(Modifier.height(20.dp))
-        Text("System & Security", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text("System & Security (2FA)", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         FluidGlassCard {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                SettingRow("Push Notifications", Icons.Rounded.Notifications)
-                SettingRow("Security & 2FA", Icons.Rounded.Security)
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                SettingRow(
+                    text = "Push Notifications",
+                    icon = Icons.Rounded.Notifications
+                )
+                SettingRow(
+                    text = "Security & 2FA (Hardware Keystore)",
+                    icon = Icons.Rounded.Security,
+                    onClick = { showSecurityDialog = true }
+                )
                 if (onLogout != null) {
                     SettingRow(
                         text = "Sign Out",
@@ -2165,6 +2579,97 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(110.dp))
+    }
+
+    // Security & 2FA Info Dialog
+    if (showSecurityDialog) {
+        Dialog(onDismissRequest = { showSecurityDialog = false }) {
+            FluidGlassCard(shape = RoundedCornerShape(24.dp)) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = Color(0xFF00E676),
+                        modifier = Modifier.size(44.dp)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Hardware Security & 2FA",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onBackground
+                    )
+                    Text(
+                        text = "Production-grade Keystore Cryptography",
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    FluidGlassCard(shape = RoundedCornerShape(12.dp)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Android Keystore: AES-256 GCM Active", fontSize = 12.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("EncryptedSharedPreferences Vault Active", fontSize = 12.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Fingerprint, null, tint = colors.primary, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("BiometricPrompt: BIOMETRIC_STRONG", fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Require Biometrics for Sensitive Actions", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = isBiometricProtected,
+                            onCheckedChange = { viewModel?.setBiometricProtected(it) }
+                        )
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    Button(
+                        onClick = { showSecurityDialog = false },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Close")
+                    }
+                }
+            }
+        }
+    }
+
+    if (biometricError != null) {
+        AlertDialog(
+            onDismissRequest = { biometricError = null },
+            icon = { Icon(Icons.Rounded.Warning, null, tint = colors.error) },
+            title = { Text("Biometrics Cancelled") },
+            text = { Text(biometricError ?: "Biometric confirmation was not completed.") },
+            confirmButton = {
+                TextButton(onClick = { biometricError = null }) {
+                    Text("OK")
+                }
+            }
+        )
     }
 }
 

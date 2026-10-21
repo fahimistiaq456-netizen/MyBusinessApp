@@ -1,5 +1,9 @@
 package com.example.mybusinessapp.ui.weather
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,18 +23,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mybusinessapp.ui.FluidGlassCard
 import com.example.mybusinessapp.ui.Soft3DIcon
 import com.example.mybusinessapp.weather.WeatherState
 import com.example.mybusinessapp.weather.WeatherViewModel
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
     val weatherState by weatherViewModel.weatherState.collectAsState()
@@ -41,14 +43,20 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
     val context = LocalContext.current
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
-    val locationPermissionsState = rememberMultiplePermissionsState(
-        listOf(
-            android.Manifest.permission.ACCESS_FINE_LOCATION,
-            android.Manifest.permission.ACCESS_COARSE_LOCATION
-        )
-    )
+    fun hasLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    var permissionGranted by remember { mutableStateOf(hasLocationPermission()) }
 
     fun requestLocationUpdate() {
+        if (!hasLocationPermission()) return
         try {
             fusedLocationClient.getCurrentLocation(
                 Priority.PRIORITY_HIGH_ACCURACY,
@@ -56,16 +64,42 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
             ).addOnSuccessListener { location ->
                 if (location != null) {
                     weatherViewModel.fetchWeatherByLocation(location.latitude, location.longitude)
+                } else {
+                    weatherViewModel.fetchWeather("San Francisco")
                 }
+            }.addOnFailureListener {
+                weatherViewModel.fetchWeather("San Francisco")
             }
-        } catch (e: SecurityException) { }
+        } catch (e: SecurityException) {
+            weatherViewModel.fetchWeather("San Francisco")
+        }
     }
 
-    LaunchedEffect(locationPermissionsState.allPermissionsGranted) {
-        if (locationPermissionsState.allPermissionsGranted) {
+    // Modern runtime permission handling using rememberLauncherForActivityResult
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (fineGranted || coarseGranted) {
+            permissionGranted = true
             requestLocationUpdate()
         } else {
-            locationPermissionsState.launchMultiplePermissionRequest()
+            // Fallback to default city weather if user denied GPS
+            weatherViewModel.fetchWeather("San Francisco")
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (hasLocationPermission()) {
+            requestLocationUpdate()
+        } else {
+            permissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
         }
     }
 
@@ -73,10 +107,15 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
         onClick = {
-            if (locationPermissionsState.allPermissionsGranted) {
+            if (hasLocationPermission()) {
                 requestLocationUpdate()
             } else {
-                locationPermissionsState.launchMultiplePermissionRequest()
+                permissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
             }
         }
     ) {
@@ -91,7 +130,7 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = colors.primary)
                         Spacer(Modifier.height(12.dp))
-                        Text("Detecting Location...", color = colors.onSurfaceVariant, fontSize = 12.sp)
+                        Text("Detecting Location & Weather...", color = colors.onSurfaceVariant, fontSize = 12.sp)
                     }
                 }
             }
@@ -103,17 +142,26 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Rounded.Warning, null, tint = colors.error, modifier = Modifier.size(40.dp))
-                        Text("GPS Error", color = colors.onSurface, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Rounded.CloudOff, null, tint = colors.error, modifier = Modifier.size(40.dp))
+                        Spacer(Modifier.height(6.dp))
+                        Text("Weather Unavailable", color = colors.onSurface, fontWeight = FontWeight.Bold)
                         Text(state.message, color = colors.onSurfaceVariant, fontSize = 12.sp)
-                        Button(onClick = { requestLocationUpdate() }, modifier = Modifier.padding(top = 8.dp)) {
-                            Text("Retry GPS")
+                        Button(
+                            onClick = {
+                                if (hasLocationPermission()) requestLocationUpdate()
+                                else weatherViewModel.fetchWeather("San Francisco")
+                            },
+                            modifier = Modifier.padding(top = 10.dp)
+                        ) {
+                            Text("Retry Weather")
                         }
                     }
                 }
             }
             is WeatherState.Success -> {
                 val weatherData = state.weatherData
+                val isOffline = state.isOfflineCache
+
                 Column(modifier = Modifier.padding(24.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -128,16 +176,35 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
                                 color = colors.onSurface,
                                 letterSpacing = (-2).sp
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.size(8.dp).background(Color(0xFF00E676), CircleShape))
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "LIVE • $currentDay",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF00E676),
-                                    letterSpacing = 1.sp
-                                )
+
+                            // Live vs Offline Cache indicator with relative timestamp
+                            if (isOffline) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(8.dp).background(Color(0xFFFFB74D), CircleShape))
+                                    Spacer(Modifier.width(6.dp))
+                                    val relTime = state.cachedTimestamp?.let {
+                                        weatherViewModel.getRelativeTimeSpan(it)
+                                    } ?: "recently"
+                                    Text(
+                                        text = "OFFLINE • Updated $relTime",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFFB74D),
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(8.dp).background(Color(0xFF00E676), CircleShape))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "LIVE • $currentDay",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00E676),
+                                        letterSpacing = 1.sp
+                                    )
+                                }
                             }
                         }
 
@@ -171,7 +238,7 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
 
                     Spacer(Modifier.height(24.dp))
 
-                    // BENTO STYLE STAT GRID
+                    // BENTO STYLE STAT GRID: Temp, Humidity, Wind speed, UV Index, Air Pressure
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -190,7 +257,7 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
                         )
                         WeatherDetailItem(
                             label = "UV Index",
-                            value = "${weatherData.uvi?.toInt() ?: 0}",
+                            value = "${weatherData.uvi?.toInt() ?: 4}",
                             icon = Icons.Rounded.WbSunny,
                             color = Color(0xFFFFB300)
                         )
@@ -203,45 +270,23 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         WeatherDetailItem(
+                            label = "Pressure",
+                            value = "${weatherData.main.pressure} hPa",
+                            icon = Icons.Rounded.Speed,
+                            color = Color(0xFFAB47BC)
+                        )
+                        WeatherDetailItem(
                             label = "Visibility",
                             value = "${(weatherData.visibility / 1000)}km",
                             icon = Icons.Rounded.Visibility,
                             color = Color(0xFFFF7043)
                         )
                         WeatherDetailItem(
-                            label = "Pressure",
-                            value = "${weatherData.main.pressure}",
-                            icon = Icons.Rounded.Speed,
-                            color = Color(0xFFAB47BC)
-                        )
-                        WeatherDetailItem(
                             label = "Condition",
                             value = weatherData.weather.firstOrNull()?.main ?: "Clear",
                             icon = Icons.Rounded.CloudQueue,
-                            color = Color(0xFF90A4AE)
+                            color = Color(0xFF29B6F6)
                         )
-                    }
-
-                    if (weatherData.sys != null) {
-                        Spacer(Modifier.height(24.dp))
-                        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.2f))
-                        Spacer(Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Soft3DIcon(Icons.Rounded.WbTwilight, Color(0xFFFFB74D), size = 32.dp, iconSize = 16.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Sunrise: ${weatherViewModel.formatTime(weatherData.sys.sunrise)}", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Soft3DIcon(Icons.Rounded.WbTwilight, Color(0xFFFB8C00), size = 32.dp, iconSize = 16.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Sunset: ${weatherViewModel.formatTime(weatherData.sys.sunset)}", fontSize = 12.sp, color = colors.onSurfaceVariant)
-                            }
-                        }
                     }
                 }
             }
@@ -249,44 +294,52 @@ fun SimpleWeatherWidget(weatherViewModel: WeatherViewModel = viewModel()) {
     }
 }
 
-
 @Composable
-fun WeatherIcon3D(condition: String) {
-    val infiniteTransition = rememberInfiniteTransition(label = "weather")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(tween(2000, easing = LinearOutSlowInEasing), RepeatMode.Reverse),
-        label = "rotation"
-    )
-
-    val (icon, color) = when (condition.lowercase()) {
-        "clear" -> Icons.Rounded.WbSunny to Color(0xFFFFD600)
-        "clouds" -> Icons.Rounded.Cloud to Color(0xFFB0BEC5)
-        "rain" -> Icons.Rounded.Umbrella to Color(0xFF64B5F6)
-        else -> Icons.Rounded.WbSunny to Color(0xFFFFD600)
+fun WeatherDetailItem(label: String, value: String, icon: ImageVector, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(color.copy(alpha = 0.15f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-
-    Soft3DIcon(
-        imageVector = icon,
-        color = color,
-        size = 56.dp,
-        iconSize = 28.dp,
-        modifier = Modifier.graphicsLayer { rotationZ = rotation }
-    )
 }
 
 @Composable
-fun WeatherDetailItem(label: String, value: String, icon: ImageVector, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Soft3DIcon(
-            imageVector = icon,
-            color = color,
-            size = 42.dp,
-            iconSize = 20.dp
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(value, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-        Text(label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+fun WeatherIcon3D(condition: String) {
+    val infiniteTransition = rememberInfiniteTransition(label = "weatherAnim")
+    val floatOffset by infiniteTransition.animateFloat(
+        initialValue = -4f,
+        targetValue = 4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "weatherFloat"
+    )
+
+    val (icon, color) = when (condition.lowercase()) {
+        "clouds" -> Icons.Rounded.Cloud to Color(0xFF90CAF9)
+        "rain" -> Icons.Rounded.WaterDrop to Color(0xFF42A5F5)
+        "thunderstorm" -> Icons.Rounded.FlashOn to Color(0xFFFFD54F)
+        "snow" -> Icons.Rounded.AcUnit to Color(0xFFE0E0E0)
+        else -> Icons.Rounded.WbSunny to Color(0xFFFFB300)
+    }
+
+    Box(
+        modifier = Modifier
+            .size(52.dp)
+            .graphicsLayer { translationY = floatOffset },
+        contentAlignment = Alignment.Center
+    ) {
+        Soft3DIcon(imageVector = icon, color = color, size = 52.dp, iconSize = 28.dp)
     }
 }

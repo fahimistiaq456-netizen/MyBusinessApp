@@ -1,73 +1,61 @@
 package com.example.mybusinessapp.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val DarkColorScheme = darkColorScheme(
-    primary = SunburstTheme.SolarOrange,
-    secondary = SunburstTheme.DeepMagenta,
-    tertiary = SunburstTheme.HorizonGold,
-    background = SunburstTheme.BgDeep,
-    surface = SunburstTheme.Surface,
-    onPrimary = SunburstTheme.TextHigh,
-    onSecondary = SunburstTheme.TextHigh,
-    onTertiary = SunburstTheme.TextHigh,
-    onBackground = SunburstTheme.TextHigh,
-    onSurface = SunburstTheme.TextHigh,
-    onSurfaceVariant = SunburstTheme.TextMed
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = SunburstTheme.SolarOrange,
-    secondary = SunburstTheme.DeepMagenta,
-    tertiary = SunburstTheme.HorizonGold,
-    background = Color(0xFFFDF8FF),
-    surface = Color(0xFFFFF0F0),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    onSurfaceVariant = Color(0xFF49454F)
-)
-
 @Composable
 fun MyBusinessAppTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
+    darkTheme: Boolean = true,
+    themeAccent: ThemeAccent = ThemeAccent.SUNBURST_AMBER,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> DarkColorScheme
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val colorScheme = buildColorScheme(themeAccent, darkTheme)
+
+    val businessSuiteColors = BusinessSuiteColors(
+        primary = themeAccent.primaryColor,
+        secondary = themeAccent.secondaryColor,
+        tertiary = themeAccent.tertiaryColor,
+        background = colorScheme.background,
+        surface = colorScheme.surface,
+        textHigh = if (darkTheme) Color(0xFFFFE4E1) else Color(0xFF1C1B1F),
+        textMed = if (darkTheme) Color(0xFFD8B4E2) else Color(0xFF49454F),
+        success = Color(0xFF00E676),
+        warning = Color(0xFFFFB300),
+        error = Color(0xFFFF334B)
+    )
+    val businessSuiteShapes = BusinessSuiteShapes()
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = Color.Transparent.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !darkTheme
-                isAppearanceLightNavigationBars = !darkTheme
+            val window = (view.context as? Activity)?.window
+            window?.let {
+                it.statusBarColor = Color.Transparent.toArgb()
+                it.navigationBarColor = colorScheme.background.toArgb()
+                WindowCompat.getInsetsController(it, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
             }
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(
+        LocalBusinessSuiteColors provides businessSuiteColors,
+        LocalBusinessSuiteShapes provides businessSuiteShapes
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }
