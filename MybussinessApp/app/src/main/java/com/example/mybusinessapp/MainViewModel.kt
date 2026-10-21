@@ -1,5 +1,6 @@
 package com.example.mybusinessapp
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mybusinessapp.auth.AuthRepository
@@ -7,6 +8,11 @@ import com.example.mybusinessapp.auth.LoginRequest
 import com.example.mybusinessapp.auth.SignUpRequest
 import com.example.mybusinessapp.auth.UpdateProfileRequest
 import com.example.mybusinessapp.auth.UserModel
+import com.example.mybusinessapp.network.NetworkMonitor
+import com.example.mybusinessapp.network.NetworkStatus
+import com.example.mybusinessapp.network.PingHealthService
+import com.example.mybusinessapp.network.PingStatus
+import com.example.mybusinessapp.network.ServerEndpointManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,6 +54,16 @@ class MainViewModel(
 
     private val _isAuthLoading = MutableStateFlow(false)
     val isAuthLoading = _isAuthLoading.asStateFlow()
+
+    private val pingHealthService = PingHealthService()
+    private var endpointManager: ServerEndpointManager? = null
+    private var networkMonitor: NetworkMonitor? = null
+
+    private val _pingStatus = MutableStateFlow<PingStatus>(PingStatus.Idle)
+    val pingStatus = _pingStatus.asStateFlow()
+
+    private val _networkStatus = MutableStateFlow<NetworkStatus>(NetworkStatus.Available)
+    val networkStatus = _networkStatus.asStateFlow()
 
     private val _serverStatus = MutableStateFlow(ServerStatus.Checking)
     val serverStatus = _serverStatus.asStateFlow()
@@ -96,6 +112,34 @@ class MainViewModel(
         }
     }
 
+    fun initSession(context: Context, manager: com.example.mybusinessapp.auth.UserSessionManager) {
+        sessionManager = manager
+        endpointManager = ServerEndpointManager.getInstance(context)
+        networkMonitor = NetworkMonitor(context, viewModelScope)
+
+        _rememberMe.value = manager.isRememberMe()
+
+        // 1. Reactive network connectivity state flow
+        viewModelScope.launch {
+            networkMonitor?.networkStatus?.collect { status ->
+                _networkStatus.value = status
+            }
+        }
+
+        // 2. Dynamic DataStore endpoint subscription
+        viewModelScope.launch {
+            endpointManager?.endpointFlow?.collect { url ->
+                _serverBaseUrl.value = url
+                authRepository.updateBaseUrl(url)
+            }
+        }
+
+        if (manager.isLoggedIn()) {
+            _currentUser.value = manager.getUser()
+        }
+        pingServer()
+    }
+
     fun initSession(manager: com.example.mybusinessapp.auth.UserSessionManager) {
         sessionManager = manager
         _rememberMe.value = manager.isRememberMe()
@@ -105,7 +149,7 @@ class MainViewModel(
         if (manager.isLoggedIn()) {
             _currentUser.value = manager.getUser()
         }
-        checkServerHealth()
+        pingServer(savedUrl)
     }
 
     fun setRememberMe(enabled: Boolean) {
@@ -114,20 +158,31 @@ class MainViewModel(
     }
 
     fun setServerBaseUrl(url: String, onFinished: ((Boolean) -> Unit)? = null) {
-        sessionManager?.setServerUrl(url)
-        val cleanUrl = sessionManager?.getServerUrl() ?: url
+        val cleanUrl = endpointManager?.sanitizeUrl(url) ?: url.trim()
         _serverBaseUrl.value = cleanUrl
+        sessionManager?.setServerUrl(cleanUrl)
         authRepository.updateBaseUrl(cleanUrl)
-        checkServerHealth(onFinished)
+        viewModelScope.launch {
+            endpointManager?.updateEndpoint(cleanUrl)
+            pingServer(cleanUrl, onFinished)
+        }
     }
 
-    fun checkServerHealth(onFinished: ((Boolean) -> Unit)? = null) {
+    fun pingServer(targetUrl: String? = null, onFinished: ((Boolean) -> Unit)? = null) {
         viewModelScope.launch {
+            _pingStatus.value = PingStatus.Pinging
             _serverStatus.value = ServerStatus.Checking
-            val isOnline = authRepository.checkServerHealth(_serverBaseUrl.value)
+            val url = targetUrl ?: _serverBaseUrl.value
+            val result = pingHealthService.ping(url)
+            _pingStatus.value = result
+            val isOnline = result is PingStatus.Connected
             _serverStatus.value = if (isOnline) ServerStatus.Connected else ServerStatus.Offline
             onFinished?.invoke(isOnline)
         }
+    }
+
+    fun checkServerHealth(onFinished: ((Boolean) -> Unit)? = null) {
+        pingServer(_serverBaseUrl.value, onFinished)
     }
 
     fun loginDemoUser(onSuccess: () -> Unit) {

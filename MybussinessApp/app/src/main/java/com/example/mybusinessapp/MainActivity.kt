@@ -66,6 +66,11 @@ import com.example.mybusinessapp.ui.theme.GradientBurst
 import com.example.mybusinessapp.ui.theme.GradientSunset
 import com.example.mybusinessapp.ui.theme.MyBusinessAppTheme
 import com.example.mybusinessapp.ui.weather.SimpleWeatherWidget
+import androidx.compose.ui.zIndex
+import com.example.mybusinessapp.network.NetworkStatus
+import com.example.mybusinessapp.network.PingStatus
+import com.example.mybusinessapp.ui.ConnectionStatusPill
+import com.example.mybusinessapp.ui.OfflineBanner
 import kotlin.math.absoluteValue
 
 // ==================================================================
@@ -83,58 +88,70 @@ class MainActivity : ComponentActivity() {
                 val rootNav = rememberNavController()
                 val viewModel: MainViewModel = viewModel()
 
+                val networkStatus by viewModel.networkStatus.collectAsState()
+
                 LaunchedEffect(Unit) {
-                    viewModel.initSession(sessionManager)
+                    viewModel.initSession(applicationContext, sessionManager)
                 }
 
                 FluidBackground {
-                    NavHost(
-                        navController = rootNav,
-                        startDestination = startDest,
-                        enterTransition = { fadeIn(animationSpec = tween(250)) },
-                        exitTransition = { fadeOut(animationSpec = tween(200)) },
-                        popEnterTransition = { fadeIn(animationSpec = tween(250)) },
-                        popExitTransition = { fadeOut(animationSpec = tween(200)) }
-                    ) {
-                        composable("login") {
-                            LoginScreen(
-                                viewModel = viewModel,
-                                onLogin = {
-                                    rootNav.navigate("main") {
-                                        popUpTo("login") { inclusive = true }
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        NavHost(
+                            navController = rootNav,
+                            startDestination = startDest,
+                            enterTransition = { fadeIn(animationSpec = tween(250)) },
+                            exitTransition = { fadeOut(animationSpec = tween(200)) },
+                            popEnterTransition = { fadeIn(animationSpec = tween(250)) },
+                            popExitTransition = { fadeOut(animationSpec = tween(200)) }
+                        ) {
+                            composable("login") {
+                                LoginScreen(
+                                    viewModel = viewModel,
+                                    onLogin = {
+                                        rootNav.navigate("main") {
+                                            popUpTo("login") { inclusive = true }
+                                        }
+                                    },
+                                    onSignUp = { rootNav.navigate("signup") },
+                                    onForgotPassword = { rootNav.navigate("forgot_password") }
+                                )
+                            }
+                            composable("signup") {
+                                SignUpScreen(
+                                    viewModel = viewModel,
+                                    onSignUpSuccess = {
+                                        rootNav.navigate("main") {
+                                            popUpTo("login") { inclusive = true }
+                                        }
+                                    },
+                                    onNavigateToLogin = {
+                                        rootNav.popBackStack()
                                     }
-                                },
-                                onSignUp = { rootNav.navigate("signup") },
-                                onForgotPassword = { rootNav.navigate("forgot_password") }
-                            )
-                        }
-                        composable("signup") {
-                            SignUpScreen(
-                                viewModel = viewModel,
-                                onSignUpSuccess = {
-                                    rootNav.navigate("main") {
-                                        popUpTo("login") { inclusive = true }
+                                )
+                            }
+                            composable("forgot_password") {
+                                ForgotPasswordScreen(
+                                    viewModel = viewModel,
+                                    onResetSuccess = {
+                                        rootNav.popBackStack()
+                                    },
+                                    onBack = {
+                                        rootNav.popBackStack()
                                     }
-                                },
-                                onNavigateToLogin = {
-                                    rootNav.popBackStack()
-                                }
-                            )
+                                )
+                            }
+                            composable("main") {
+                                MainHost(viewModel = viewModel, rootNav = rootNav)
+                            }
                         }
-                        composable("forgot_password") {
-                            ForgotPasswordScreen(
-                                viewModel = viewModel,
-                                onResetSuccess = {
-                                    rootNav.popBackStack()
-                                },
-                                onBack = {
-                                    rootNav.popBackStack()
-                                }
-                            )
-                        }
-                        composable("main") {
-                            MainHost(viewModel = viewModel, rootNav = rootNav)
-                        }
+
+                        // Reactive Offline Banner displayed at top of screen when internet drops
+                        OfflineBanner(
+                            networkStatus = networkStatus,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .zIndex(99f)
+                        )
                     }
                 }
             }
@@ -1385,13 +1402,24 @@ fun LoginScreen(
                     modifier = Modifier.padding(22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = "Backend Server Config",
-                        style = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, brush = GradientSunset)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Backend Server",
+                            style = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Bold, brush = GradientSunset)
+                        )
+                        val loginPingStatus by viewModel.pingStatus.collectAsState()
+                        ConnectionStatusPill(
+                            status = loginPingStatus,
+                            onRetry = { viewModel.pingServer(tempUrl) }
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Select your target environment or enter custom IP:",
+                        text = "Select target environment or enter custom IP:",
                         color = colors.onSurfaceVariant,
                         fontSize = 12.sp
                     )
@@ -1910,8 +1938,16 @@ fun SettingsScreen(
 ) {
     val colors = MaterialTheme.colorScheme
     val currentUser = viewModel?.currentUser?.collectAsState()?.value
-    val serverBaseUrl = viewModel?.serverBaseUrl?.collectAsState()?.value ?: "http://127.0.0.1:8080/"
-    var showServerDialog by remember { mutableStateOf(false) }
+    val serverBaseUrl: String = viewModel?.serverBaseUrl?.collectAsState()?.value ?: "http://10.0.2.2:8080/"
+    val pingStatus: PingStatus = viewModel?.pingStatus?.collectAsState()?.value ?: PingStatus.Idle
+
+    var endpointInput by remember(serverBaseUrl) { mutableStateOf(serverBaseUrl) }
+    var isEditing by remember { mutableStateOf(false) }
+
+    // Run a lightweight ping coroutine (HEAD request) when the screen opens
+    LaunchedEffect(Unit) {
+        viewModel?.pingServer()
+    }
 
     Column(
         modifier = Modifier
@@ -1948,15 +1984,156 @@ fun SettingsScreen(
             Spacer(Modifier.height(16.dp))
         }
 
-        Text("Backend Server", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        // ==============================================================
+        // 🌐 RESILIENT NETWORKING SHOWCASE (DYNAMIC LAYER & HEALTH CHECK)
+        // ==============================================================
+        Text("Backend Network & Live Health", color = colors.tertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         FluidGlassCard {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                SettingRow(
-                    text = "Endpoint: $serverBaseUrl",
-                    icon = Icons.Rounded.Dns,
-                    onClick = { showServerDialog = true }
+            Column(Modifier.padding(16.dp)) {
+                // Header with Title and Real-time Status Pill
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Dns,
+                            contentDescription = null,
+                            tint = colors.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Server Endpoint",
+                            color = colors.onBackground,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+
+                    // Live Connection Status Pill (Connected / Unreachable with round-trip latency in ms)
+                    ConnectionStatusPill(
+                        status = pingStatus,
+                        onRetry = { viewModel?.pingServer(endpointInput) }
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // Editable Endpoint Field with Apply Action
+                OutlinedTextField(
+                    value = endpointInput,
+                    onValueChange = { newValue: String ->
+                        endpointInput = newValue
+                        isEditing = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Base URL (OkHttp Dynamic Interceptor)", fontSize = 12.sp) },
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(Icons.Rounded.Link, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                viewModel?.setServerBaseUrl(endpointInput)
+                                isEditing = false
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "Apply & Ping",
+                                tint = if (isEditing) colors.primary else colors.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    },
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onDone = {
+                            viewModel?.setServerBaseUrl(endpointInput)
+                            isEditing = false
+                        }
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.primary,
+                        unfocusedBorderColor = colors.onSurface.copy(alpha = 0.2f)
+                    )
                 )
+
+                Spacer(Modifier.height(10.dp))
+
+                // Quick Presets: Emulator (10.0.2.2), USB Reverse (127.0.0.1)
+                Text(
+                    text = "Quick Presets (Dynamic Switching):",
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = endpointInput.contains("10.0.2.2"),
+                        onClick = {
+                            endpointInput = "http://10.0.2.2:8080/"
+                            viewModel?.setServerBaseUrl(endpointInput)
+                            isEditing = false
+                        },
+                        label = { Text("Emulator (10.0.2.2)", fontSize = 11.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.PhoneAndroid, null, modifier = Modifier.size(14.dp))
+                        }
+                    )
+                    FilterChip(
+                        selected = endpointInput.contains("127.0.0.1"),
+                        onClick = {
+                            endpointInput = "http://127.0.0.1:8080/"
+                            viewModel?.setServerBaseUrl(endpointInput)
+                            isEditing = false
+                        },
+                        label = { Text("USB / Reverse", fontSize = 11.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Usb, null, modifier = Modifier.size(14.dp))
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Info footer explaining the architecture
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Backed by Jetpack DataStore",
+                        fontSize = 11.sp,
+                        color = colors.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    TextButton(
+                        onClick = { viewModel?.pingServer(endpointInput) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Ping HEAD", fontSize = 12.sp)
+                    }
+                }
+
+                if (pingStatus is PingStatus.Unreachable) {
+                    val unreachable = pingStatus as PingStatus.Unreachable
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Notice: ${unreachable.reason}",
+                        color = colors.error,
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
 
@@ -1988,45 +2165,6 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(110.dp))
-    }
-
-    if (showServerDialog && viewModel != null) {
-        var tempUrl by remember { mutableStateOf(serverBaseUrl) }
-        Dialog(onDismissRequest = { showServerDialog = false }) {
-            FluidGlassCard(shape = RoundedCornerShape(24.dp)) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Change Server Endpoint",
-                        style = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, brush = GradientSunset)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    SunburstTextField(
-                        value = tempUrl,
-                        onValueChange = { tempUrl = it },
-                        label = "Base URL",
-                        icon = Icons.Rounded.Dns
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(onClick = { showServerDialog = false }, modifier = Modifier.weight(1f)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            viewModel.setServerBaseUrl(tempUrl)
-                            showServerDialog = false
-                        }, modifier = Modifier.weight(1f)) {
-                            Text("Save", color = Color.White)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

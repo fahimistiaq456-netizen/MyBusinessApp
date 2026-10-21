@@ -1,5 +1,7 @@
 package com.example.mybusinessapp.auth
 
+import com.example.mybusinessapp.network.DynamicBaseUrlInterceptor
+import com.example.mybusinessapp.network.ServerEndpointManager
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
@@ -39,22 +41,45 @@ interface AuthApiService {
     suspend fun checkHealth(): Response<Map<String, Any>>
 
     companion object {
-        // Connected via ADB reverse tunnel (tcp:8080 -> tcp:8080) for wireless debugging & emulator
-        var BASE_URL = "http://127.0.0.1:8080/"
+        var BASE_URL = ServerEndpointManager.DEFAULT_EMULATOR_URL
 
-        fun create(baseUrl: String = BASE_URL): AuthApiService {
+        @Volatile
+        private var sharedService: AuthApiService? = null
+
+        /**
+         * Creates or retrieves the singleton AuthApiService configured with DynamicBaseUrlInterceptor.
+         * Requests are dynamically redirected at runtime when settings change, eliminating the need
+         * to rebuild Retrofit instances.
+         */
+        fun create(endpointProvider: (() -> String)? = null): AuthApiService {
+            return sharedService ?: synchronized(this) {
+                sharedService ?: buildService(endpointProvider).also { sharedService = it }
+            }
+        }
+
+        private fun buildService(endpointProvider: (() -> String)?): AuthApiService {
             val logging = HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
             }
 
-            val client = OkHttpClient.Builder()
-                .addInterceptor(logging)
+            val clientBuilder = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
-                .build()
+                .addInterceptor(logging)
+
+            // Dynamic base-url switching interceptor
+            if (endpointProvider != null) {
+                clientBuilder.addInterceptor(DynamicBaseUrlInterceptor(endpointProvider))
+            } else {
+                clientBuilder.addInterceptor(DynamicBaseUrlInterceptor { BASE_URL })
+            }
+
+            val client = clientBuilder.build()
+            val initialUrl = endpointProvider?.invoke() ?: BASE_URL
+            val validUrl = if (initialUrl.endsWith("/")) initialUrl else "$initialUrl/"
 
             return Retrofit.Builder()
-                .baseUrl(baseUrl)
+                .baseUrl(validUrl)
                 .client(client)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()

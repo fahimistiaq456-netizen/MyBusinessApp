@@ -4,16 +4,16 @@ import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class AuthRepository(private var apiService: AuthApiService = AuthApiService.create()) {
+class AuthRepository(private val apiService: AuthApiService = AuthApiService.create()) {
 
     fun updateBaseUrl(newBaseUrl: String) {
-        apiService = AuthApiService.create(newBaseUrl)
+        // DynamicBaseUrlInterceptor handles runtime switching transparently
+        AuthApiService.BASE_URL = newBaseUrl
     }
 
     suspend fun checkServerHealth(baseUrl: String = AuthApiService.BASE_URL): Boolean = withContext(Dispatchers.IO) {
         try {
-            val service = AuthApiService.create(baseUrl)
-            val res = service.checkHealth()
+            val res = apiService.checkHealth()
             res.isSuccessful
         } catch (e: Exception) {
             false

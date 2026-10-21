@@ -105,7 +105,7 @@ class UserSessionManager private constructor(context: Context) {
      * Get the active backend server URL
      */
     fun getServerUrl(): String {
-        return prefs.getString(KEY_SERVER_URL, URL_USB_REVERSE) ?: URL_USB_REVERSE
+        return prefs.getString(KEY_SERVER_URL, URL_EMULATOR) ?: URL_EMULATOR
     }
 
     /**
