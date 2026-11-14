@@ -2,6 +2,18 @@
 
 A modern, high-performance Android enterprise application paired with a robust Spring Boot REST API backend.
 
+[![Live Demo Showcase](https://img.shields.io/badge/Live_Showcase-Online-06b6d4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://fahimistiaq456-netizen.github.io/MyBusinessApp/)
+[![Download APK](https://img.shields.io/badge/Download_APK-v1.0.0-8b5cf6?style=for-the-badge&logo=android&logoColor=white)](https://github.com/fahimistiaq456-netizen/MyBusinessApp/releases/download/v1.0.0/MyBusinessApp-v1.0.0.apk)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](Dockerfile)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.4-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)](demo/)
+
+---
+
+## 🌐 Remote Demo & Interview Review Links
+- **Interactive Web Showcase**: [https://fahimistiaq456-netizen.github.io/MyBusinessApp/](https://fahimistiaq456-netizen.github.io/MyBusinessApp/)
+- **Download Android APK (Direct Link)**: [MyBusinessApp-v1.0.0.apk](https://github.com/fahimistiaq456-netizen/MyBusinessApp/releases/download/v1.0.0/MyBusinessApp-v1.0.0.apk)
+- **Run Online Without Installing**: Upload the APK to [Appetize.io](https://appetize.io/upload) to interact with the Android app directly in any desktop browser.
+
 ---
 
 ## 📱 Architecture Overview
