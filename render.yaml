@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: mybusiness-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/auth/health
+    envVars:
+      - key: SPRING_DATA_MONGODB_URI
+        sync: false

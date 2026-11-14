@@ -1,0 +1,9 @@
+.gradle
+.idea
+build
+bin
+out
+*.log
+.git
+.gitignore
+MybussinessApp
